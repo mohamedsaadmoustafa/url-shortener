@@ -9,21 +9,7 @@ Run locally (requires Postgres, Redis, Kafka):
 This zip contains source, Dockerfile, Flyway migration and simple k8s manifests.
 
 
-todo:
-~~Batch Click Processing~~
-~~Database Sharding / Partitioning~~
-~~Blacklist / Safe URLs~~
-Abuse Detection
 
-Clicks حسب البلد / الجهاز / الـ browser
-
-Authentication & Authorization
-
-Prometheus
-Grafana
-Elasticsearch + Kibana
-Kafka Connect
-Nginx
 
 
 
