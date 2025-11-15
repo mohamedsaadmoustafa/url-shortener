@@ -1,0 +1,45 @@
+-- ==========================================
+-- Flyway Migration V6
+-- Description: Trigger to check Blacklist and Abuse Detection on URL insert
+-- ==========================================
+
+-- Create new function
+CREATE OR REPLACE FUNCTION fn_check_blacklist_and_abuse()
+RETURNS TRIGGER AS $$
+DECLARE
+    blk_count INT;
+    abuse_count INT;
+BEGIN
+    -- 1️⃣ Check against Blacklist
+    SELECT COUNT(*) INTO blk_count
+    FROM blacklist_urls b
+    WHERE NEW.original_url ~ b.url_pattern;
+
+    IF blk_count > 0 THEN
+        RAISE EXCEPTION 'Cannot insert URL: it matches a blacklisted pattern';
+    END IF;
+
+    -- 2️⃣ Simple Abuse Detection: prevent same IP/user from spamming
+    -- Assuming NEW contains created_by_ip and created_at columns
+    -- You may adjust this logic according to your schema
+    SELECT COUNT(*) INTO abuse_count
+    FROM urls u
+    WHERE u.created_at >= NOW() - INTERVAL '1 hour'
+      AND u.original_url = NEW.original_url;
+
+    IF abuse_count > 10 THEN
+        RAISE EXCEPTION 'Abuse detected: too many submissions for this URL in the last hour';
+    END IF;
+
+    -- 3️⃣ Optional: update Redis cache trigger (requires external call via application)
+    -- Can be done via NOTIFY/LISTEN or application-level event
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+CREATE TRIGGER trg_check_blacklist
+BEFORE INSERT ON urls
+FOR EACH ROW
+EXECUTE FUNCTION fn_check_blacklist_and_abuse();
