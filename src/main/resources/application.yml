@@ -46,6 +46,10 @@ app:
     post-max-tokens: 20       # Maximum POST requests per IP
     get-max-tokens: 50        # Maximum GET requests per IP
     refill-interval-seconds: 60
+  qr:
+    width: 300
+    height: 300
+    ttl-days: 7
 
 logging:
   level:

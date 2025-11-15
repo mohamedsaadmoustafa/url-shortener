@@ -12,4 +12,13 @@ import org.springframework.context.annotation.Configuration;
 public class AppProperties {
     private String baseUrl = "http://localhost:8080";
     private long cacheTtlSeconds = 86400;
+    private Qr qr = new Qr();
+
+    @Getter
+    @Setter
+    public static class Qr {
+        private int width;
+        private int height;
+        private int ttlDays;
+    }
 }
