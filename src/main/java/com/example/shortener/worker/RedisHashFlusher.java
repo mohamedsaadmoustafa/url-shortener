@@ -3,6 +3,8 @@ package com.example.shortener.worker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -14,8 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Component
@@ -27,55 +27,43 @@ public class RedisHashFlusher {
     private final ThreadPoolTaskExecutor taskExecutor; // يجب تعريف Bean في SpringConfig
 
     private static final String HASH_KEY = "clicks";
-    private static final int BATCH_SIZE = 1000;
+    private static final int BATCH_SIZE = 500;
 
-    @Scheduled(fixedRate = 100_000)
-    public void flush() {
-        log.info("=== [RedisHashFlusher] Starting Redis hash flush... ===");
+    @Scheduled(fixedRate = 30_000)
+    public void flushIncrementally() {
+        // Use HSCAN for incremental processing
+        try (Cursor<Map.Entry<Object, Object>> cursor = redisTemplate.opsForHash()
+                .scan(HASH_KEY, ScanOptions.scanOptions().count(BATCH_SIZE).build())) {
+            List<Map.Entry<String, Long>> batch = new ArrayList<>();
+            while (cursor.hasNext()) {
+                Map.Entry<Object, Object> entry = cursor.next();
+                batch.add(Map.entry(
+                        entry.getKey().toString(),
+                        Long.parseLong(entry.getValue().toString())
+                ));
 
-        Map<Object, Object> allClicks = redisTemplate.opsForHash().entries(HASH_KEY);
-        if (allClicks.isEmpty()) {
-            log.info("[RedisHashFlusher] No clicks to flush.");
-            return;
-        }
+                if (batch.size() >= BATCH_SIZE) {
+                    processAndDeleteBatch(batch);
+                    batch.clear();
+                }
+            }
 
-        List<Map.Entry<String, Long>> batch = new ArrayList<>(BATCH_SIZE);
-        AtomicInteger batchCounter = new AtomicInteger(0);
-        long totalProcessed = 0L;
-
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        for (Map.Entry<Object, Object> entry : allClicks.entrySet()) {
-            String shortKey = entry.getKey().toString();
-            Long count = Long.parseLong(entry.getValue().toString());
-
-            batch.add(Map.entry(shortKey, count));
-
-            if (batch.size() >= BATCH_SIZE) {
-                List<Map.Entry<String, Long>> batchCopy = new ArrayList<>(batch);
-                int currentBatch = batchCounter.incrementAndGet();
-                futures.add(CompletableFuture.runAsync(() -> processBatch(batchCopy, currentBatch), taskExecutor));
-                totalProcessed += batch.size();
-                batch.clear();
+            // Process remaining
+            if (!batch.isEmpty()) {
+                processAndDeleteBatch(batch);
             }
         }
+    }
 
-        // Process remaining records
-        if (!batch.isEmpty()) {
-            List<Map.Entry<String, Long>> batchCopy = new ArrayList<>(batch);
-            int currentBatch = batchCounter.incrementAndGet();
-            futures.add(CompletableFuture.runAsync(() -> processBatch(batchCopy, currentBatch), taskExecutor));
-            totalProcessed += batch.size();
-        }
+    private void processAndDeleteBatch(List<Map.Entry<String, Long>> batch) {
+        // Process batch
+        processBatch(batch, 1);
 
-        // Wait for all batches to complete
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-
-        // Remove processed keys from Redis
-        redisTemplate.delete(HASH_KEY);
-
-        log.info("=== [RedisHashFlusher] Flush complete. Total processed: {} records in {} batches ===",
-                totalProcessed, batchCounter.get());
+        // Delete processed keys
+        String[] keys = batch.stream()
+                .map(Map.Entry::getKey)
+                .toArray(String[]::new);
+        redisTemplate.opsForHash().delete(RedisHashFlusher.HASH_KEY, (Object[]) keys);
     }
 
     /**

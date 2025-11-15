@@ -8,8 +8,10 @@ import com.example.shortener.util.KeyGenerator;
 import com.example.shortener.util.UrlValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -157,25 +159,18 @@ public class UrlService {
         return saved;
     }
 
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     private Url createGeneratedAlias(String originalUrl, Instant expiresAt) {
-        for (int attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
-            String key = keyGenerator.generate();
-
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            String key = keyGenerator.generate();  // e.g., "aBc123"
+            // Check if key exists (potential race condition here!)
             if (urlRepository.existsByShortKey(key)) {
-                log.debug("Attempt {}/{}: Key '{}' already exists, retrying...",
-                        attempt, MAX_GENERATION_ATTEMPTS, key);
-                continue;
+                continue; // Try another key
             }
-
             Url url = buildUrl(originalUrl, key, false, expiresAt);
-            Url saved = saveAndCache(url);
-            log.info("✅ Generated new short key '{}'", saved.getShortKey());
-            return saved;
+            return urlRepository.save(url);
         }
-
-        throw new IllegalStateException(
-                String.format("Unable to generate unique key after %d attempts", MAX_GENERATION_ATTEMPTS)
-        );
+        throw new IllegalStateException("Couldn't generate unique key");
     }
 
     private Url saveAndCache(Url url) {
